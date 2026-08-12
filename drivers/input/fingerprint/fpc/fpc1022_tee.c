@@ -177,7 +177,7 @@ static const struct mt_chip_conf spi_mcc = {
 u32 spi_speed = 1 * 1000000;
 #endif
 
-static void fpc1022_get_irqNum(struct fpc1022_data *fpc1022)
+static int fpc1022_get_irqNum(struct fpc1022_data *fpc1022)
 {
 	//u32 ints[2] = {0, 0};
 	struct device_node *node;
@@ -198,11 +198,17 @@ static void fpc1022_get_irqNum(struct fpc1022_data *fpc1022)
 		fpc1022->irq_gpio = of_get_named_gpio(node, "fpc,gpio_irq", 0);
 		printk("%s , fpc1022->irq_num = %d, fpc1022->irq_gpio = %d\n",
 		       __func__, fpc1022->irq_num, fpc1022->irq_gpio);
-		if (!fpc1022->irq_num)
+		if (!fpc1022->irq_num) {
 			printk("irq_of_parse_and_map fail!!\n");
+			return -ENXIO;
+		}
 
-	} else
+	} else {
 		pr_err("%s can't find compatible node\n", __func__);
+		return -ENODEV;
+	}
+
+	return 0;
 }
 
 static int hw_reset(struct fpc1022_data *fpc1022)
@@ -553,7 +559,11 @@ static int fpc1022_platform_probe(struct platform_device *pldev)
 		dev_err(dev, "pinctrl err, rst_low\n");
 		goto err_lookup_state;
 	}
-	fpc1022_get_irqNum(fpc1022);
+	ret = fpc1022_get_irqNum(fpc1022);
+	if (ret < 0) {
+		dev_err(dev, "fpc1022_get_irqNum failed (%d), skipping fingerprint driver\n", ret);
+		goto err_lookup_state;
+	}
 
 	ret = of_property_read_u32(np, "fpc,event-type", &val);
 	fpc1022->event_type = ret < 0 ? EV_MSC : val;
@@ -600,12 +610,18 @@ static int fpc1022_platform_probe(struct platform_device *pldev)
 
 	mutex_init(&fpc1022->lock);
 
+	if (fpc1022->irq_num <= 0) {
+		dev_err(dev, "invalid irq_num %d, skipping irq request\n", fpc1022->irq_num);
+		ret = -ENXIO;
+		goto err_request_irq;
+	}
+
 	ret = devm_request_threaded_irq(dev, fpc1022->irq_num,
 					NULL, fpc1022_irq_handler, irqf,
 					dev_name(dev), fpc1022);
 
-	if (ret) {
-		dev_err(dev, "could not request irq %d\n", fpc1022->irq_num);
+	if (ret < 0) {
+		dev_err(dev, "could not request irq %d (%d), skipping fingerprint driver\n", fpc1022->irq_num, ret);
 		goto err_request_irq;
 	}
 	dev_info(dev, "requested irq %d\n", fpc1022->irq_num);
