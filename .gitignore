@@ -128,3 +128,4 @@ out/
 *.zip
 Anykernel/
 clang*
+build.log
